@@ -7,8 +7,8 @@ from os.path import isfile, join
 import matplotlib.pyplot as plt
 
 ############ user parameters ##################
-logN_max = 13.2
-logN_min = 13.2
+logN_max = 13
+logN_min = 13
 logN_steps = 1
 
 b_values = [20]
@@ -16,10 +16,10 @@ b_values = [20]
 N_CIV_per_strength = 100
 N_CIV_per_QSO = 1
 
+column_error_max = 0.3
+column_threshold = 12.5
 window_size =  30
-z_threshold = 0.001
-SNR_threshold = 5
-chi2_threshold = 3
+z_threshold = 0.0005
 
 ############# Constants #######################
 f_CIV_1548 = 0.194000
@@ -44,7 +44,7 @@ files_spectra = [f for f in all_files if f[-16:-4] == '_continuum_X' and f[-4::]
 
 #files_spectra =files_spectra[::-1]
 
-# Fix strength bins, number of CIV per bin, divide by number of QSOs sightlines
+#Fix strength bins, number of CIV per bin, divide by number of QSOs sightlines
 logN = np.linspace(logN_min,logN_max,logN_steps)
 number_loops_QSO = np.ceil(N_CIV_per_strength/len(files_spectra))
 
@@ -65,10 +65,7 @@ for b in b_values:
 				# Get RESVEL
 				file = open('../QSOfiles_vpfit/' +  files_spectra[i] , 'r')
 				lines= file.readlines()
-				if lines[0][2:7] == 'HIRES':
-					RESVEL = float(lines[1][0:-1][7::])*5
-				else:
-					RESVEL = float(lines[1][0:-1][7::])
+				RESVEL = float(lines[1][0:-1][7::])
 				# Divide by continuum, get RESVEL
 				wave = np.array([w for w,f in zip(spectra[:,0],spectra[:,1]) if f != 0.0])
 				flux = np.array([f for f in spectra[:,1] if f != 0.0])
@@ -83,15 +80,14 @@ for b in b_values:
 				max_noise_index = np.max(np.where(err < 0.2)) 
 				#print(wave[max_noise_index] / (1+z_QSO)), np.min((np.max(wave)/(CIV_2+10)-1, z_QSO))
 				redshift = np.random.uniform((1+z_QSO)*1026./1216. - 1 , np.min((np.max(wave[max_noise_index])/(CIV_2+10)-1, z_QSO)),1)
-				amplitude = logN_to_amp(strength,b,(1+redshift)*CIV_1)
 				# Create modified flux
-				mod_flux = add_CIV(wave,flux,redshift,amplitude,b/np.mean(dvperpix))
+				#mod_flux = add_CIV(wave,flux,redshift,strength,b,RESVEL,dvperpix[np.min(np.where(wave>(1+redshift)*CIV_1))])
+				mod_flux = flux + doublet_CIV_voigt(wave=wave,logN=strength,b=b,z=redshift,RESVEL = RESVEL,upsampled=10) 
 				print( 'Find z=', redshift, ' at ' , (1+redshift)*CIV_1)
 				# Get CIV_guesses
-				redshifts_guesses = guess_CIV(wave,mod_flux,err, SNR_threshold = SNR_threshold, 
-											  z_threshold = z_threshold, chi2_threshold = chi2_threshold,
+				redshifts_guesses = guess_CIV(wave,mod_flux,err, column_threshold = column_threshold,
+											  z_threshold = z_threshold, column_error_max = column_error_max,
 											  RESVEL = np.mean(dvperpix), window_size = window_size)
-				
 				input_redshifts.append(redshift)
 				print(np.round(redshift,2) in np.round(redshifts_guesses,2))
 				matching += np.round(redshift,2) in np.round(redshifts_guesses,2)
@@ -100,7 +96,7 @@ for b in b_values:
 		np.savetxt('./Completeness/input_logN_' + str(strength) + '_b_' +str(b)+'.txt',np.array(input_redshifts))
 		Completeness[np.where(logN == strength)] = matching /(number_loops_QSO*len(files_spectra))
 		print(Completeness[np.where(logN == strength)])
-np.savetxt('./completeness_'+str(logN_min)+'_' + str(logN_max)+'.txt', Completeness)
+np.savetxt('./completeness_'+str(logN_min)+'_' + str(logN_max)+'_H.txt', Completeness)
 
 
 ### dvperpix in km/s
