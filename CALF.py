@@ -5,21 +5,30 @@ from utils import *
 from os import listdir
 from os.path import isfile, join
 import matplotlib.pyplot as plt
+import argparse
 
+##### PARSER #####
+parser = argparse.ArgumentParser(description='Input Parameters Integers.')
+parser.add_argument('doppler', metavar='B', type=float,help='doppler')
+parser.add_argument('logN', metavar='N', type=float,help='density')
+parser.add_argument('inst', metavar='I', type=str , help='instrument_name')
+args = parser.parse_args()
 ############ user parameters ##################
-logN_max = 13
-logN_min = 13
+logN_max = args.logN
+logN_min = args.logN
 logN_steps = 1
 
-b_values = [20]
+b_values = [args.doppler]
 
-N_CIV_per_strength = 100
+N_CIV_per_strength = 1000
 N_CIV_per_QSO = 1
 
 column_error_max = 0.3
-column_threshold = 12.5
-window_size =  30
+column_threshold = 12.0
+window_size =  50
 z_threshold = 0.0005
+
+purity = False
 
 ############# Constants #######################
 f_CIV_1548 = 0.194000
@@ -37,10 +46,13 @@ QSO_redshift = {'J0148+0600': 5.923 , 'J0836+0054':5.81 , 'J0927+2001': 5.772,
 	'J1509-1749': 6.12, 'J1602+4228': 6.09, 'J2054-0005': 6.062, 'J2315-0023': 6.117 }
 
 ###############################################
-
+# Uncomment for local use
 all_files = [f for f in listdir('/Users/RomainMeyer/Dropbox/PhD/CIVLya_Corr_QSO/QSOfiles_vpfit/') 
 	if isfile(join('/Users/RomainMeyer/Dropbox/PhD/CIVLya_Corr_QSO/QSOfiles_vpfit/', f))]
-files_spectra = [f for f in all_files if f[-16:-4] == '_continuum_X' and f[-4::]=='.txt']
+# Uncomment for legion use
+#all_files = [f for f in listdir('./spectra_files/') 
+#	if isfile(join('./spectra_files/', f))]
+files_spectra = [f for f in all_files if f[-16:-4] == '_continuum_'+args.inst and f[-4::]=='.txt']
 
 #files_spectra =files_spectra[::-1]
 
@@ -56,74 +68,52 @@ for b in b_values:
 	for strength in logN:
 		matching = 0
 		input_redshifts = []
-		guesses_CIV_file = open('./Completeness/guesses_logN_' + str(strength) + '_b_' +str(b)+'.txt','w')
+		#guesses_CIV_file = open('./guesses_N_'+str(args.logN) + '_b_' + str(args.doppler) + '_I_' + args.inst+'.txt','w')
 		for loop in range(int(number_loops_QSO)):
 			for i in range(len(files_spectra)):
-				print(i + loop*len(files_spectra),files_spectra[i])
+				#print(i + loop*len(files_spectra),files_spectra[i])
 				z_QSO = QSO_redshift[files_spectra[i][0:10]]	
 				spectra = np.loadtxt('../QSOfiles_vpfit/' +  files_spectra[i] ,skiprows =2)
 				# Get RESVEL
 				file = open('../QSOfiles_vpfit/' +  files_spectra[i] , 'r')
 				lines= file.readlines()
 				RESVEL = float(lines[1][0:-1][7::])
-				# Divide by continuum, get RESVEL
+				# Divide by continuum
 				wave = np.array([w for w,f in zip(spectra[:,0],spectra[:,1]) if f != 0.0])
 				flux = np.array([f for f in spectra[:,1] if f != 0.0])
 				err = np.array([e for e,f in zip(spectra[:,2],spectra[:,1]) if f != 0.0])
 				continuum = np.array([c for c,f in zip(spectra[:,3],spectra[:,1]) if f != 0.0])
 				flux = flux/continuum
 				err = err/continuum
-				dvperpix = 1e-3*constants.c*np.array([(wave[i]-wave[i-1])/wave[i] for i in range(len(wave))])
-				dvperpix[0] = dvperpix[1]
+
 				# Draw random redshifts and fixed strengths from bins
-				#strengths = logN[loop*N_CIV_per_QSO_per_b:np.min((logN_steps,(loop+1)*N_CIV_per_QSO_per_b))]
 				max_noise_index = np.max(np.where(err < 0.2)) 
 				#print(wave[max_noise_index] / (1+z_QSO)), np.min((np.max(wave)/(CIV_2+10)-1, z_QSO))
 				redshift = np.random.uniform((1+z_QSO)*1026./1216. - 1 , np.min((np.max(wave[max_noise_index])/(CIV_2+10)-1, z_QSO)),1)
+				redshift = 10000./CIV_1 -1
 				# Create modified flux
-				#mod_flux = add_CIV(wave,flux,redshift,strength,b,RESVEL,dvperpix[np.min(np.where(wave>(1+redshift)*CIV_1))])
-				mod_flux = flux + doublet_CIV_voigt(wave=wave,logN=strength,b=b,z=redshift,RESVEL = RESVEL,upsampled=10) 
-				print( 'Find z=', redshift, ' at ' , (1+redshift)*CIV_1)
+				#mod_flux =  1+add_CIV(wave,flux,z=redshift,strength=strength,b=b, RESVEL=RESVEL)
+				mod_flux = 1+doublet_CIV_voigt(wave=wave,logN=strength,b=b,z=redshift,RESVEL = RESVEL,upsampling=20) 
+				np.savetxt('./test.txt',np.transpose([wave,mod_flux,err]))
+
+				#print( 'Find z=', redshift, ' at ' , (1+redshift)*CIV_1)
 				# Get CIV_guesses
 				redshifts_guesses = guess_CIV(wave,mod_flux,err, column_threshold = column_threshold,
 											  z_threshold = z_threshold, column_error_max = column_error_max,
-											  RESVEL = np.mean(dvperpix), window_size = window_size)
+											  RESVEL = RESVEL, window_size = window_size)
 				input_redshifts.append(redshift)
-				print(np.round(redshift,2) in np.round(redshifts_guesses,2))
+				#print(np.round(redshift,2) in np.round(redshifts_guesses,2))
 				matching += np.round(redshift,2) in np.round(redshifts_guesses,2)
 				guesses_CIV_file.write(str(redshifts_guesses)[1:-1] + '\n')
 				# Write mock CIV redshifts in file A
-		np.savetxt('./Completeness/input_logN_' + str(strength) + '_b_' +str(b)+'.txt',np.array(input_redshifts))
+		#np.savetxt('./inputs_N_'+str(args.logN) + '_b_' + str(args.doppler) + '_I_' + args.inst+'.txt',np.array(input_redshifts))
 		Completeness[np.where(logN == strength)] = matching /(number_loops_QSO*len(files_spectra))
-		print(Completeness[np.where(logN == strength)])
-np.savetxt('./completeness_'+str(logN_min)+'_' + str(logN_max)+'_H.txt', Completeness)
+		#print(Completeness[np.where(logN == strength)])
+if purity:
+	np.savetxt('./purity_N_'+str(args.logN) + '_b_' + str(args.doppler) + '_I_' + args.inst+'.txt', Completeness)
+else:
+	np.savetxt('./completeness_N_'+str(args.logN) + '_b_' + str(args.doppler) + '_I_' + args.inst+'.txt', Completeness)
 
-
-### dvperpix in km/s
-#dvperpix = 1e-3*constants.c*np.array([(wave[i]-wave[i-1])/wave[i] for i in range(len(wave))])
-#dvperpix[0] = dvperpix[1]
-
-# LogN approx
-
-#doublets_full = np.array([[doublet[0],doublet[1],doublet[2],doublet[3],doublet[4]
-#	, np.log10(-np.sum(np.log10(voigt_approx(wave,doublet[0],doublet[1],doublet[2],doublet[3])+1) * dvperpix)
-#		/ (f_CIV_1548 * CIV_1 * column_conversion_const)) ]
-#	for doublet in voigt_params])
-
-#if len(doublets)>0:
-#	print(doublets[:,1]/CIV_1-1.0)
-#	print(doublets[:,2])
-#	print(doublets[:,3])
-#	print(doublets[:,4])
-#	print(doublets[:,5])
-
-#plt.plot(wave[lya_index::],f[lya_index::],'k')
-#plt.plot(wave[lya_index::],med[lya_index::],'--b')
-#plt.plot(wave[lya_index::],error[lya_index::], '--r')
-#plt.vlines(x = peaks, ymin= 0, ymax = 2, color = 'k')
-#plt.vlines(x =  doublets[:,1], ymin=0,ymax=3.5, color = 'r')
-#plt.vlines(x =  doublets[:,1]/CIV_1*CIV_2, ymin=0,ymax=3, color = 'g')
-#plt.show()
 
 
 
