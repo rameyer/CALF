@@ -8,6 +8,7 @@ from scipy.signal import argrelmax
 from scipy.stats import sigmaclip
 from scipy.special import wofz
 from scipy.interpolate import interp1d
+from scipy.integrate import quad
 from astropy.modeling.models import Voigt1D
 
 def cluster_redshifts(redshift_array,delta_z):
@@ -116,8 +117,6 @@ def doublet_voigt(wave,logN,b,z,Gamma_1,Gamma_2,lambda_1,lambda_2, f_1,f_2,RESVE
 	#tau = (10**logN)*column_conversion_const*(f_1*lambda_1*V_1 + f_2*lambda_2*V_2 )
 	voigt_lambda = np.exp(-(10**logN)*column_conversion_cgs*(1e3/constants.c)*(f_1*lambda_1*lambda_1*(1+z)*V_1 + f_2*lambda_2*lambda_2*(1+z)*V_2 )) - 1  
 	
-	plt.plot(upsampled_wave,np.exp(-V_1)+np.exp(-V_2))
-	plt.show()
 
 	center = (1+z)*(lambda_1+lambda_2)*0.5
 	sigma= (1+z)*(lambda_1+lambda_2)*0.5*(RESVEL/2.235)*1e3/constants.c
@@ -133,17 +132,17 @@ def doublet_voigt(wave,logN,b,z,Gamma_1,Gamma_2,lambda_1,lambda_2, f_1,f_2,RESVE
 	convolved_voigt = np.convolve(voigt_lambda*dlambda,resolution_profile, 'same')
 	downsampled = convolved_voigt[0:len(convolved_voigt):upsampling]
 
-	print(np.sum(voigt_lambda*dlambda),np.sum(convolved_voigt*dlambda))
+	#print(np.sum(voigt_lambda*dlambda),np.sum(convolved_voigt*dlambda))
 
 	assert len(wave)==len(downsampled), 'Upsampled+Downsampled array has not the original array lenghth. Check upsampling value.'
-
+	'''
 	plt.plot(upsampled_wave,convolved_voigt, 'b')
 	plt.plot(upsampled_wave, voigt_lambda,'--k')
 	plt.plot(upsampled_wave[index_min:index_max],resolution_profile,'r')
-	#plt.plot(upsampled_wave,convolved_voigt,'b')
+	plt.plot(upsampled_wave,convolved_voigt,'b')
 	plt.plot(wave,downsampled,'g')
 	plt.show()
-
+	'''
 	return downsampled
 
 def voigt_faddeeva(x, y, sigma):
@@ -179,8 +178,8 @@ def gaussian(x, Amp,mu, sigma):
 	''' A simple gaussian definition with usual parameters'''
 	return Amp*np.exp(-(x-mu)**2/(2*sigma**2)) 
 
-#def gaussian_fit(x,params):
-#	return (params[0]/np.sqrt(2*np.pi*params[2]**2))*np.exp(-(x-params[1])**2/(2*params[2]**2)) 
+def gaussian_fit(x,params):
+	return (params[0]*np.exp(-(x-params[1])**2/(2*params[2]**2))) 
 
 def reduced_chi2_gaussian(params,x,flux,error):
 	y =  params[0]*np.exp(-(x-params[1])**2/(2*params[2]**2)) 
@@ -363,7 +362,8 @@ def fit_sigma_clip(wave, flux, error, x0, bounds,  method = 'TNC' ,
 			fit_flux = gaussian(temp_wave,*popt)
 
 			std = np.std(fit_flux-temp_flux)
-			new_indices = [k for k in range(len(temp_wave)) if np.abs(temp_flux[k]-fit_flux[k]) < sigma*std]
+			new_indices = [k for k in range(len(temp_wave)) 
+							if np.abs(temp_flux[k]-fit_flux[k]) < sigma*std]
 			if new_indices == []:
 				return popt,pcov,temp_wave,temp_flux,temp_error
 			else:
@@ -375,6 +375,30 @@ def fit_sigma_clip(wave, flux, error, x0, bounds,  method = 'TNC' ,
 				init = popt
 		return popt,pcov,temp_wave,temp_flux,temp_error
 
+def log_inverse_gaussian(temp_wave,params):
+	return np.log(1/ (1+(params[0]*np.exp(-(temp_wave-params[1])**2/(2*params[2]**2)))) )
+
+def log_column_density_from_gaussian(temp_wave,popt,perr,redshift,wavelength,transition_strength):
+
+	column_conversion_cgs = 2.654e-15
+
+	density  = quad(log_inverse_gaussian,np.min(temp_wave),np.max(temp_wave),args=popt)[0] / (column_conversion_cgs*
+						(1e3/constants.c)*transition_strength*wavelength*wavelength*(1+redshift) ) 
+	popt_plus = popt
+	popt_plus[0] = popt_plus[0] + 2*perr[0] 
+	popt_plus[2] = popt_plus[2] + 2*perr[2] 
+	plus_1_sigma_density = quad(log_inverse_gaussian,np.min(temp_wave),np.max(temp_wave),args=popt_plus)[0] / (column_conversion_cgs*
+						(1e3/constants.c)*transition_strength*wavelength*wavelength*(1+redshift) ) 
+	popt_minus = popt
+	popt_minus[0] = popt_minus[0] - 2*perr[0] 
+	popt_minus[2] = popt_minus[2] - 2*perr[2] 
+	minus_1_sigma_density = quad(log_inverse_gaussian,np.min(temp_wave),np.max(temp_wave),args=popt_minus)[0] / (column_conversion_cgs*
+						(1e3/constants.c)*transition_strength*wavelength*wavelength*(1+redshift) ) 
+
+
+	return np.log10(density),np.log10(plus_1_sigma_density),np.log10(minus_1_sigma_density)
+
+
 def logN(wave,flux,err,delta_width, RESVEL,window_size = 40, column_error_max=0.1 ):
 	###### Constants ######
 	f_CIV_1548 = 0.1899
@@ -382,6 +406,9 @@ def logN(wave,flux,err,delta_width, RESVEL,window_size = 40, column_error_max=0.
 	column_conversion_const =  (np.pi*constants.e**2)/(constants.c * constants.m_e) 
 	CIV_1 = 1548.2020    
 	CIV_2 = 1550.7740 
+	# FWHM to sigma
+	s_RESVEL = RESVEL / 2.235
+
 	###### Conversion #####
 	logN = np.zeros(len(wave))
 	#dvperpix = 1e-3*constants.c*np.array([(wave[i]-wave[i-1])/wave[i] for i in range(len(wave))])
@@ -400,38 +427,44 @@ def logN(wave,flux,err,delta_width, RESVEL,window_size = 40, column_error_max=0.
 	logN_2_err = np.zeros(len(wave))
 	wave_c = np.zeros(len(wave))
 
-
 	for i in fitting_locations_indices:
-		#print(wave[i])
 		temp_wave = wave[int(i-window_size*0.5):int(i+window_size*0.5)]
 		temp_flux = flux[int(i-window_size*0.5):int(i+window_size*0.5)] -1
 		temp_err = err[int(i-window_size*0.5):int(i+window_size*0.5)]
+		z_min = wave[i]/CIV_1 -1
+		z_max = wave[i]/CIV_2 -1
 		popt,pcov,_,_,_ = fit_sigma_clip(temp_wave,temp_flux, temp_err, 
-			   iters = 5, sigma = 2, fun = gaussian, x0 = [-0.2,wave[i],np.sqrt(20.0**2+RESVEL**2)*1e3*wave[i]/constants.c], 
-			   method = 'trf' , bounds = ( [-1,wave[i]*(1-5*1e3/constants.c), np.sqrt(5.0**2+RESVEL**2)*1e3*wave[i]/constants.c],
-			   	[0, wave[i]*(1+5*1e3/constants.c), np.sqrt(40.0**2+RESVEL**2)*1e3*wave[i]/constants.c] )  )
+			   iters = 5, sigma = 3, fun = gaussian, x0 = [-0.2,wave[i],np.sqrt(20.0**2+s_RESVEL**2)*1e3*wave[i]/constants.c], 
+			   method = 'trf' , bounds = ( [-1,wave[i]*(1-5*1e3/constants.c), np.sqrt(5**2+s_RESVEL**2)*1e3*wave[i]/constants.c],
+			   	[0, wave[i]*(1+5.0*1e3/constants.c), np.sqrt(40.0**2+s_RESVEL**2)*1e3*wave[i]/constants.c] )  )
 
 		perr = np.sqrt(np.diag(pcov))
 
-		tau = -np.log(1+popt[0])
-		if (1+popt[0]) > 3*perr[0]:
-			wave_c[i] = popt[1]
-			integral_tau = -popt[0]*np.sqrt(2*np.pi)*popt[2]
-			#print tau, int_tau
-			logN_1[i] = -np.log10((f_CIV_1548 * CIV_1 * column_conversion_const) /integral_tau)
-			logN_2[i] = -np.log10((f_CIV_1550 * CIV_2 * column_conversion_const) /integral_tau)
-			logN_1_err[i] = np.abs(perr[0]/popt[0] + perr[2]/popt[2])
-			logN_2_err[i] = np.abs(perr[0]/popt[0] + perr[2]/popt[2])
+		if True:
 
-	#wave_c = np.array([w for w,c in zip(wave,logN_1) if c != 0])
+			log_density_1,log_density_1_plus,log_density_1_minus = log_column_density_from_gaussian(temp_wave=temp_wave,popt=popt,
+												perr=perr,redshift=z_min,wavelength=CIV_1,transition_strength=f_CIV_1548)
+			
+			logN_1[i] = log_density_1
+			logN_1_err[i] = 0.5*(np.abs(log_density_1_plus-log_density_1) + np.abs(log_density_1_minus-log_density_1) ) 
+			
+			log_density_2,log_density_2_plus,log_density_2_minus = log_column_density_from_gaussian(temp_wave=temp_wave,popt=popt,
+												perr=perr,redshift=z_max,wavelength=CIV_2,transition_strength=f_CIV_1550)
+			logN_2[i] = log_density_2
+			logN_2_err[i] = 0.5*(np.abs(log_density_2_plus-log_density_2) + np.abs(log_density_2_minus-log_density_2) ) 
+			
+
 	temp_log = np.array([[lN1,lN2,err1,err2,w] for lN1,lN2,err1,err2,w 
-				in zip(logN_1,logN_2,logN_1_err, logN_2_err,wave_c) 
-				if lN1 >10 and lN2 >10 and err1 <= column_error_max and err2<=column_error_max ])
-	
-	return temp_log[:,0], temp_log[:,1], temp_log[:,2], temp_log[:,3], temp_log[:,4]
+				in zip(logN_1,logN_2,logN_1_err, logN_2_err,wave) 
+				if lN1 >0 and lN2 >0 and err1 <= column_error_max and err2<=column_error_max ])
+	#print (temp_log)
+	if len(temp_log) == 1:
+		return temp_log[0], temp_log[1], temp_log[2], temp_log[3], temp_log[4]
+	else:
+		return temp_log[:,0], temp_log[:,1], temp_log[:,2], temp_log[:,3], temp_log[:,4]
 
 def potential_CIV_from_column_densities(wave_c,columns_1,columns_2,error_1,error_2,
-								threshold_columns = 13, tol_columns = 0.05, tol_redshift = 0.0005):
+								RESVEL, threshold_columns = 13, tol_columns = 0.05):
 	# Constants
 	CIV_1 = 1548.2020    
 	CIV_2 = 1550.7740
@@ -441,27 +474,27 @@ def potential_CIV_from_column_densities(wave_c,columns_1,columns_2,error_1,error
 	thresholded_columns_1 = np.array([[c1,err,w]  for c1,err,w in zip(columns_1,error_1,wave_c) if c1 > threshold_columns-err])
 	for tc1 in thresholded_columns_1:
 		potential_columns = np.array([c2 for c2,err2,w2 in zip(columns_2,error_2,wave_c) 
-				if (np.abs(tc1[2]/CIV_1-w2/CIV_2) < tol_redshift and
-					np.abs(tc1[0] - c2) < tc1[1]+err2 ) ])
+				if (np.abs(tc1[2]/CIV_1-w2/CIV_2) <= 2*(w2/CIV_1)*(RESVEL*1e3/constants.c) and
+					np.abs(tc1[0] - c2) < tc1[1]+err2+tol_columns ) ])
 		if len(potential_columns)>0:
 			redshifts.append(tc1[2]/CIV_1 - 1)
 	return redshifts
 
-def guess_CIV(wave,flux,err, z_threshold = 0.0005, column_threshold = 13,
+def guess_CIV(wave,flux,err, column_threshold = 13,
 				column_error_max = 0.2,RESVEL = 30.0, window_size = 20):
 	redshift_CIV_guesses = []
 	# Constants
 	CIV_1 = 1548.2020    
 	CIV_2 = 1550.7740
 	# Columns_1
-	columns_1, columns_2,error_1,error_2, wave_c = logN(wave,flux,err,delta_width = 20,RESVEL = RESVEL,
+	columns_1, columns_2,error_1,error_2, wave_c = logN(wave,flux,err,delta_width = 10,RESVEL = RESVEL,
 														column_error_max = column_error_max, window_size=window_size)
 	# Find paired densities + thresholding
 	CIV_redshifts = potential_CIV_from_column_densities(wave_c,columns_1,
 						columns_2, error_1,error_2, threshold_columns = column_threshold,
-						tol_columns = 0.1, tol_redshift = z_threshold)
+						tol_columns = 0.0, RESVEL = RESVEL)
 
-	print(CIV_redshifts)
+	#print(CIV_redshifts)
 	plt.errorbar(wave_c, columns_1,error_1)
 	plt.errorbar(wave_c, columns_2,error_2)
 	plt.plot(wave,flux)

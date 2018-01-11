@@ -20,13 +20,17 @@ logN_steps = 1
 
 b_values = [args.doppler]
 
-N_CIV_per_strength = 1000
+N_CIV_per_strength = 20
 N_CIV_per_QSO = 1
 
-column_error_max = 0.3
+if args.inst == 'X': 
+	column_error_max = 0.05
+elif args.inst =='H': 
+	column_error_max = 0.15
+elif args.inst =='E': 
+	column_error_max = 0.25
 column_threshold = 12.0
 window_size =  50
-z_threshold = 0.0005
 
 purity = False
 
@@ -70,8 +74,9 @@ for b in b_values:
 		input_redshifts = []
 		#guesses_CIV_file = open('./guesses_N_'+str(args.logN) + '_b_' + str(args.doppler) + '_I_' + args.inst+'.txt','w')
 		for loop in range(int(number_loops_QSO)):
-			for i in range(len(files_spectra)):
+			for i in range(0,len(files_spectra)):
 				#print(i + loop*len(files_spectra),files_spectra[i])
+				print (files_spectra[i])
 				z_QSO = QSO_redshift[files_spectra[i][0:10]]	
 				spectra = np.loadtxt('../QSOfiles_vpfit/' +  files_spectra[i] ,skiprows =2)
 				# Get RESVEL
@@ -85,26 +90,30 @@ for b in b_values:
 				continuum = np.array([c for c,f in zip(spectra[:,3],spectra[:,1]) if f != 0.0])
 				flux = flux/continuum
 				err = err/continuum
-
 				# Draw random redshifts and fixed strengths from bins
-				max_noise_index = np.max(np.where(err < 0.2)) 
-				#print(wave[max_noise_index] / (1+z_QSO)), np.min((np.max(wave)/(CIV_2+10)-1, z_QSO))
-				redshift = np.random.uniform((1+z_QSO)*1026./1216. - 1 , np.min((np.max(wave[max_noise_index])/(CIV_2+10)-1, z_QSO)),1)
-				redshift = 10000./CIV_1 -1
+				max_noise_indices = np.where(err < 0.3)
+				list_CIV = []
+				#for i in range(1000):
+				redshift = np.random.uniform((1+z_QSO)*1026./1216. - 1 , np.min((np.max(wave[max_noise_indices])/(CIV_2+10)-1, z_QSO)),1)
+				while (wave[max_noise_indices][np.min(np.where((1+redshift)*(CIV_2+0.5)<wave[max_noise_indices]))] - (1+redshift)*(CIV_2+0.5) > 1) or ((1+redshift)*(CIV_1-0.5) -  wave[max_noise_indices][np.max(np.where(((1+redshift)*(CIV_1-0.5))>wave[max_noise_indices]))] > 1) :
+					redshift = np.random.uniform((1+z_QSO)*1026./1216. - 1 , np.min((np.max(wave[max_noise_indices])/(CIV_2+10)-1, z_QSO)),1)
+				#	list_CIV.append(redshift)
+				#plt.scatter((1+np.array(list_CIV))*CIV_1, np.ones(1000)*1.5)
+				#plt.plot(wave,flux)
+				#plt.show()
+				#redshift = 8310/CIV_1-1
 				# Create modified flux
-				#mod_flux =  1+add_CIV(wave,flux,z=redshift,strength=strength,b=b, RESVEL=RESVEL)
-				mod_flux = 1+doublet_CIV_voigt(wave=wave,logN=strength,b=b,z=redshift,RESVEL = RESVEL,upsampling=20) 
-				np.savetxt('./test.txt',np.transpose([wave,mod_flux,err]))
-
+				#mod_flux = flux+doublet_CIV_voigt(wave=wave,logN=strength,b=b,z=redshift,RESVEL = RESVEL,upsampling=20) 
+				mod_flux = flux
 				#print( 'Find z=', redshift, ' at ' , (1+redshift)*CIV_1)
 				# Get CIV_guesses
 				redshifts_guesses = guess_CIV(wave,mod_flux,err, column_threshold = column_threshold,
-											  z_threshold = z_threshold, column_error_max = column_error_max,
+											  column_error_max = column_error_max,
 											  RESVEL = RESVEL, window_size = window_size)
 				input_redshifts.append(redshift)
 				#print(np.round(redshift,2) in np.round(redshifts_guesses,2))
 				matching += np.round(redshift,2) in np.round(redshifts_guesses,2)
-				guesses_CIV_file.write(str(redshifts_guesses)[1:-1] + '\n')
+				#guesses_CIV_file.write(str(redshifts_guesses)[1:-1] + '\n')
 				# Write mock CIV redshifts in file A
 		#np.savetxt('./inputs_N_'+str(args.logN) + '_b_' + str(args.doppler) + '_I_' + args.inst+'.txt',np.array(input_redshifts))
 		Completeness[np.where(logN == strength)] = matching /(number_loops_QSO*len(files_spectra))
